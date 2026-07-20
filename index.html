@@ -722,7 +722,8 @@ details.hist .hist-body{padding:0 16px 14px;color:var(--mute);font-size:.82rem;l
       <h3>Enter code</h3>
       <p class="sub">We've sent a 6-digit code to <b id="otpPhoneLbl"></b>.</p>
       <input class="finput" id="authOtp" inputmode="numeric" placeholder="6-digit OTP" style="margin-bottom:16px;letter-spacing:.3em;text-align:center;font-size:1.2rem">
-      <button class="btn btn-solid" style="width:100%" onclick="confirmOtp()">Verify &amp; continue</button>
+      <button class="btn btn-solid" id="verifyBtn" style="width:100%" onclick="confirmOtp()">Verify &amp; continue</button>
+      <div class="auth-alt"><button id="resendBtn" onclick="resendOtp()" disabled>Resend OTP (30)</button></div>
       <div class="auth-alt"><button onclick="showAuthView('phone')">Change number</button></div>
     </div>
     <div id="avCreate" style="display:none">
@@ -831,6 +832,7 @@ details.hist .hist-body{padding:0 16px 14px;color:var(--mute);font-size:.82rem;l
   </div>
 </div>
 
+<div id="recaptchaSlot" aria-hidden="true"></div>
 <div class="toast" id="toast">Added to cart</div>
 
 <script>
@@ -1351,12 +1353,78 @@ function toggleDrawer(show){
 }
 updateCart();
 
-/* ================= AUTH ================= */
-let profile = null, confirmation = null, recaptcha = null, recaptcha2 = null;
-let regMode = false, pendingReg = null, pendingCheckout = false;
+/* ================= AUTH (v3.1 — hardened) ================= */
+let profile = null, confirmation = null, pendingCheckout = false;
+let lastPhone = null, lastMode = null, sendingOtp = false, resendT = null;
+
+/* --- disposable reCAPTCHA: a poisoned verifier can never brick the page --- */
+let _verifier = null;
+function freshRecaptcha(){
+  try { if (_verifier) _verifier.clear(); } catch(e){}
+  _verifier = null;
+  const slot = document.getElementById("recaptchaSlot");
+  slot.innerHTML = "";
+  const box = document.createElement("div");
+  box.id = "rcbox-" + Date.now();
+  slot.appendChild(box);
+  _verifier = new firebase.auth.RecaptchaVerifier(box.id, { size: "invisible" });
+  return _verifier;
+}
+function mapAuthError(e){
+  const c = (e && e.code) || "";
+  console.error("AUTH ERROR:", c, e);
+  if (c === "auth/too-many-requests") return "Too many attempts from this device — please wait 15–30 minutes and try again.";
+  if (c === "auth/invalid-phone-number") return "That phone number doesn't look valid — use a 10-digit Indian mobile number.";
+  if (c === "auth/invalid-app-credential" || c === "auth/captcha-check-failed" || c === "auth/app-not-authorized")
+    return "This website isn't authorised for OTP yet — in Firebase, add doorsatlegacy.com under Authentication → Settings → Authorized domains.";
+  if (c === "auth/quota-exceeded") return "Today's free OTP limit is used up — please try again tomorrow.";
+  if (c === "auth/network-request-failed") return "Network hiccup — check your connection and try again.";
+  if (c === "auth/code-expired") return "That code expired — tap Resend OTP for a fresh one.";
+  if (c === "auth/invalid-verification-code") return "Wrong code — check the SMS and try again.";
+  return "Couldn't complete that — please try again." + (c ? " (" + c + ")" : "");
+}
+async function sendOtp(phone, mode){
+  if (sendingOtp) return false;
+  sendingOtp = true;
+  try {
+    confirmation = await auth.signInWithPhoneNumber(phone, freshRecaptcha());
+    lastPhone = phone; lastMode = mode;
+    document.getElementById("otpPhoneLbl").textContent = phone;
+    document.getElementById("authOtp").value = "";
+    showAuthView("otp");
+    startResendTimer();
+    toast("OTP sent to " + phone);
+    return true;
+  } catch(e) {
+    toast(mapAuthError(e));
+    try { if (_verifier) { _verifier.clear(); } } catch(_){}
+    _verifier = null;
+    return false;
+  } finally {
+    sendingOtp = false;
+  }
+}
+function startResendTimer(){
+  clearInterval(resendT);
+  const btn = document.getElementById("resendBtn");
+  let n = 30;
+  btn.disabled = true; btn.textContent = "Resend OTP (" + n + ")";
+  resendT = setInterval(() => {
+    n--;
+    if (n <= 0) { clearInterval(resendT); btn.disabled = false; btn.textContent = "Resend OTP"; }
+    else btn.textContent = "Resend OTP (" + n + ")";
+  }, 1000);
+}
+async function resendOtp(){
+  if (!lastPhone) { showAuthView("phone"); return; }
+  const btn = document.getElementById("resendBtn");
+  btn.disabled = true; btn.textContent = "Sending…";
+  const ok = await sendOtp(lastPhone, lastMode);
+  if (!ok) { btn.disabled = false; btn.textContent = "Resend OTP"; }
+}
 
 function openAuth(){
-  if (profile || (auth && auth.currentUser && profile)) { openDash(); return; }
+  if (profile) { openDash(); return; }
   if (!fbReady) { toast("Accounts go live once Firebase keys are added in CONFIG"); return; }
   document.getElementById("authIntro").textContent = "Enter your registered mobile number — we'll send a one-time code.";
   document.getElementById("notRegNote").style.display = "none";
@@ -1385,29 +1453,19 @@ async function startPhoneAuth(){
   const phone = "+91" + raw.slice(-10);
   const btn = document.getElementById("sendOtpBtn");
   btn.disabled = true; btn.textContent = "Checking…";
-  /* Registration check BEFORE any OTP is sent */
-  let registered = false;
+  let registered = false, checkFailed = false;
   try {
     const idx = await db.collection("phoneIndex").doc(phone).get();
     registered = idx.exists;
-  } catch(e) { console.warn("phoneIndex check failed", e); registered = true; /* fail open to not lock out */ }
+  } catch(e) { console.warn("phoneIndex check failed", e); checkFailed = true; }
+  if (checkFailed) registered = true; /* fail open — never lock out on a network blip */
   if (!registered) {
     btn.disabled = false; btn.textContent = "Get OTP";
     document.getElementById("notRegNote").style.display = "block";
-    toast("This number isn't registered with us yet");
     return;
   }
-  try {
-    if (!recaptcha) recaptcha = new firebase.auth.RecaptchaVerifier("sendOtpBtn", { size: "invisible" });
-    regMode = false;
-    confirmation = await auth.signInWithPhoneNumber(phone, recaptcha);
-    document.getElementById("otpPhoneLbl").textContent = phone;
-    showAuthView("otp");
-    toast("OTP sent");
-  } catch(e) {
-    console.error(e); toast("Couldn't send OTP — please try again");
-    if (recaptcha) { recaptcha.clear(); recaptcha = null; }
-  }
+  btn.textContent = "Sending OTP…";
+  await sendOtp(phone, "login");
   btn.disabled = false; btn.textContent = "Get OTP";
 }
 async function createAccount(){
@@ -1419,57 +1477,66 @@ async function createAccount(){
   if (rawP.length < 10) { toast("Enter a valid 10-digit mobile number"); return; }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { toast("Please enter a valid email address"); return; }
   const phone = "+91" + rawP.slice(-10);
-  pendingReg = { firstName: first, lastName: last, email };
-  /* Already OTP-verified with this exact number (edge case)? Save directly. */
+  window.pendingReg = { firstName: first, lastName: last, email };
   if (auth.currentUser && auth.currentUser.phoneNumber === phone) {
     await finishRegistration(auth.currentUser);
     return;
   }
   const btn = document.getElementById("createBtn");
   btn.disabled = true; btn.textContent = "Sending OTP…";
-  try {
-    if (!recaptcha2) recaptcha2 = new firebase.auth.RecaptchaVerifier("createBtn", { size: "invisible" });
-    regMode = true;
-    confirmation = await auth.signInWithPhoneNumber(phone, recaptcha2);
-    document.getElementById("otpPhoneLbl").textContent = phone;
-    showAuthView("otp");
-    toast("OTP sent — verify to create your account");
-  } catch(e) {
-    console.error(e); toast("Couldn't send OTP — check the number and try again");
-    if (recaptcha2) { recaptcha2.clear(); recaptcha2 = null; }
-  }
+  await sendOtp(phone, "register");
   btn.disabled = false; btn.textContent = "Create account & send OTP";
 }
 async function confirmOtp(){
   const code = document.getElementById("authOtp").value.trim();
   if (code.length < 6) { toast("Enter the 6-digit code"); return; }
+  if (!confirmation) { toast("Session expired — start again"); showAuthView("phone"); return; }
+  const btn = document.getElementById("verifyBtn");
+  btn.disabled = true; btn.textContent = "Verifying…";
   try {
     const cred = await confirmation.confirm(code);
-    if (regMode) await finishRegistration(cred.user);
+    clearInterval(resendT);
+    if (lastMode === "register") await finishRegistration(cred.user);
     else await afterLogin(cred.user);
-  } catch(e) { console.error(e); toast("Wrong code — try again"); }
+  } catch(e) {
+    toast(mapAuthError(e));
+  }
+  btn.disabled = false; btn.textContent = "Verify & continue";
 }
 async function finishRegistration(user){
-  profile = { ...pendingReg, phone: user.phoneNumber, createdAt: firebase.firestore.FieldValue.serverTimestamp() };
-  await db.collection("users").doc(user.uid).set(profile);
-  try { await db.collection("phoneIndex").doc(user.phoneNumber).set({ createdAtMs: Date.now() }); } catch(e){ console.warn(e); }
-  regMode = false; pendingReg = null;
-  setAuthUI(); closeAll();
-  toast("Account created — welcome, " + profile.firstName + "!");
-  postAuth();
+  try {
+    profile = { ...(window.pendingReg || {}), phone: user.phoneNumber, createdAt: firebase.firestore.FieldValue.serverTimestamp() };
+    await db.collection("users").doc(user.uid).set(profile, { merge: true });
+    try { await db.collection("phoneIndex").doc(user.phoneNumber).set({ createdAtMs: Date.now() }); } catch(e){ console.warn("phoneIndex write:", e); }
+    window.pendingReg = null; lastMode = null;
+    setAuthUI(); closeAll();
+    toast("Account created — welcome, " + profile.firstName + "!");
+    postAuth();
+  } catch(e) {
+    console.error(e);
+    toast("Account verified but saving details failed — please try again.");
+  }
 }
 async function afterLogin(user){
-  const doc = await db.collection("users").doc(user.uid).get();
-  if (doc.exists) {
-    profile = doc.data();
-    setAuthUI();
-    closeAll();
-    toast("Welcome back, " + profile.firstName + "!");
-    postAuth();
-  } else {
-    /* verified phone but no profile — collect details, no second OTP needed */
-    document.getElementById("regPhone").value = (user.phoneNumber || "").replace("+91", "");
-    showAuthView("create");
+  try {
+    const doc = await db.collection("users").doc(user.uid).get();
+    if (doc.exists) {
+      profile = doc.data();
+      /* self-heal: make sure this account is in the phone index */
+      try {
+        const idx = await db.collection("phoneIndex").doc(user.phoneNumber).get();
+        if (!idx.exists) await db.collection("phoneIndex").doc(user.phoneNumber).set({ createdAtMs: Date.now() });
+      } catch(e){}
+      setAuthUI(); closeAll();
+      toast("Welcome back, " + profile.firstName + "!");
+      postAuth();
+    } else {
+      document.getElementById("regPhone").value = (user.phoneNumber || "").replace("+91", "");
+      showAuthView("create");
+      toast("One last step — tell us your name");
+    }
+  } catch(e) {
+    console.error(e); toast("Signed in, but couldn't load your profile — try again.");
   }
 }
 function postAuth(){
@@ -1480,26 +1547,20 @@ function setAuthUI(){
 }
 function doSignOut(){
   if (auth) auth.signOut();
-  profile = null; setAuthUI(); closeAll(); toast("Signed out");
+  profile = null; pendingCheckout = false; lastPhone = null; lastMode = null; confirmation = null;
+  setAuthUI(); closeAll(); toast("Signed out");
 }
 if (auth) {
   auth.onAuthStateChanged(async user => {
     if (user && !profile) {
-      const doc = await db.collection("users").doc(user.uid).get();
-      if (doc.exists) { profile = doc.data(); setAuthUI(); }
+      try {
+        const doc = await db.collection("users").doc(user.uid).get();
+        if (doc.exists) { profile = doc.data(); setAuthUI(); }
+      } catch(e){ console.warn(e); }
     }
   });
 }
 
-/* ================= DASHBOARD ================= */
-const STATUS_CLASS = { new: "st-new", confirmed: "st-new", "in-production": "st-production", ready: "st-ready", delivered: "st-delivered" };
-const STATUS_LABEL = {
-  submitted:"Submitted", "under-review":"Under review", "clarification-required":"Clarification required",
-  "quotation-ready":"Quotation ready", accepted:"Accepted", "advance-pending":"Advance pending",
-  "advance-received":"Advance received", scheduled:"Scheduled", "in-production":"In production",
-  "quality-check":"Quality check", "ready-for-dispatch":"Ready for dispatch",
-  dispatched:"Dispatched", delivered:"Delivered", cancelled:"Cancelled"
-};
 const QUOTE_STAGE = ["submitted","under-review","clarification-required","quotation-ready"];
 const DONE_STAGE  = ["delivered","closed","cancelled"];
 const MILE_IDX = { accepted:0, "advance-pending":0, "advance-received":0, scheduled:1, "in-production":2, "quality-check":3, "ready-for-dispatch":4, dispatched:5, delivered:6, closed:6 };
