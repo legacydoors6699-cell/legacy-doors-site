@@ -307,7 +307,20 @@ footer{border-top:1px solid var(--line2);padding:64px 0 130px;background:var(--b
 .st-delivered{background:rgba(160,160,160,.15);color:#bbb}
 .oc-items{color:var(--mute);font-size:.84rem;line-height:1.8}
 .oc-items b{color:var(--cream)}
-.dash-sec{font-family:'Manrope';font-size:.76rem;letter-spacing:.16em;text-transform:uppercase;color:var(--mute);margin:24px 0 12px}
+.dash-sec{font-family:'Manrope';font-size:.76rem;letter-spacing:.16em;text-transform:uppercase;color:var(--mute);margin:26px 0 12px;display:flex;align-items:center;gap:10px}
+.dash-sec::after{content:'';flex:1;height:1px;background:var(--line2)}
+.dstats{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:18px 0 6px}
+.dstat{border:1px solid var(--line2);border-radius:12px;padding:14px 12px;text-align:center;background:var(--bg)}
+.dstat b{display:block;font-family:'Sora',sans-serif;font-size:1.5rem;color:var(--cream);line-height:1.1}
+.dstat span{font-size:.7rem;letter-spacing:.1em;text-transform:uppercase;color:var(--mute)}
+.dstat.hot b{color:var(--leaf)}
+.oc-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:13px}
+.oc-btn{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line2);border-radius:8px;padding:8px 14px;font-size:.76rem;font-weight:700;color:var(--mute);background:transparent;cursor:pointer;font-family:inherit}
+.oc-btn:hover{border-color:var(--leaf);color:var(--leaf)}
+.oc-btn.wa:hover{border-color:#25d366;color:#25d366}
+.dempty{text-align:center;padding:38px 20px;border:1px dashed var(--line2);border-radius:14px}
+.dempty h4{font-family:'Sora',sans-serif;font-size:1.05rem;color:var(--cream);margin-bottom:8px}
+.dempty p{color:var(--mute);font-size:.86rem;margin-bottom:18px;line-height:1.7}
 .dash-sec:first-child{margin-top:0}
 .miles{display:flex;gap:5px;margin:12px 0 4px}
 .miles i{flex:1;height:5px;border-radius:3px;background:var(--line2)}
@@ -1570,36 +1583,44 @@ function doorThumb(code){
   const n = m ? parseInt(m[1]) : 0;
   return (n>=1 && n<=201 && typeof IMG !== "undefined" && IMG[n]) ? '<img src="data:image/jpeg;base64,'+IMG[n]+'" alt="'+esc(code)+'">' : '';
 }
+function fmtDate(ms){
+  return ms ? new Date(ms).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"}) : "";
+}
 function orderCard(o, withMiles){
   const st = (o.status || "submitted");
-  const dt = o.createdAtMs ? new Date(o.createdAtMs).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"}) : "";
   const ref = esc(o.worksOrderId || ("#" + o.id.slice(-6).toUpperCase()));
   const mi = MILE_IDX[st];
+  const token = o.trackingToken || o.trackToken || "";
   const doors = (o.items||[]).map(x =>
     '<div class="oc-door">' + doorThumb(x.code) +
     '<span><b>'+esc(x.code)+'</b><br>'+esc(x.height ?? x.h)+'×'+esc(x.width ?? x.w)+' in × '+(x.quantity ?? x.q)+
     ((x.shade)?' · '+esc(x.shade):'')+'</span></div>').join("");
+  const total = (o.items||[]).reduce((s,x)=>s+(+(x.quantity ?? x.q ?? 1)),0);
   let miles = "";
   if (withMiles && mi !== undefined){
     miles = '<div class="miles">'+MILE_LBL.map((_,k)=>'<i class="'+(k<=mi?"on":"")+'"></i>').join("")+'</div>'+
-            '<div class="mile-lbl">'+MILE_LBL[mi]+(o.committedDate?' · <span class="oc-due">Delivery: '+esc(o.committedDate)+'</span>':'')+'</div>';
+            '<div class="mile-lbl"><b style="color:var(--cream)">'+MILE_LBL[mi]+'</b>'+
+            (o.committedDate?' · <span class="oc-due">Delivery: '+esc(o.committedDate)+'</span>':'')+'</div>';
   }
-  const wa = '<button class="oc-wa" onclick="openWA(\'Hi Legacy Doors, regarding my order '+ref+'\')">'+
-    '<svg width="13" height="13" viewBox="0 0 32 32" fill="currentColor"><path d="M16 3C9.4 3 4 8.4 4 15c0 2.6.8 5 2.3 7L4 29l7.2-2.2c1.5.8 3.1 1.2 4.8 1.2 6.6 0 12-5.4 12-12S22.6 3 16 3z"/></svg>Chat about this order</button>';
+  const actions = '<div class="oc-actions">' +
+    (token ? '<button class="oc-btn" onclick="showPublicTracking(\''+esc(token)+'\')">Live tracking</button>' : '') +
+    '<button class="oc-btn wa" onclick="openWA(\'Hi Legacy Doors, regarding my order '+ref+'\')">Chat about this order</button></div>';
   return '<div class="order-card"><div class="oc-top">'+
-    '<span class="oc-id">'+ref+'</span><span class="oc-date">'+dt+'</span>'+
+    '<span class="oc-id">'+ref+'</span><span class="oc-date">'+fmtDate(o.createdAtMs)+'</span>'+
     '<span class="status '+(STATUS_CLASS[st] || (st.includes("production")?"st-production":"st-new"))+'">'+esc(STATUS_LABEL[st]||st)+'</span></div>'+
-    miles+'<div class="oc-doors">'+doors+'</div>'+wa+'</div>';
+    miles+'<div class="oc-doors">'+doors+'</div>'+
+    '<p style="color:var(--mute);font-size:.76rem;margin-top:10px">'+total+' door'+(total>1?'s':'')+' in this order</p>'+
+    actions+'</div>';
 }
 function histRow(o){
   const st = (o.status||"delivered");
-  const dt = o.createdAtMs ? new Date(o.createdAtMs).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"}) : "";
   const ref = esc(o.worksOrderId || ("#"+o.id.slice(-6).toUpperCase()));
-  const n = (o.items||[]).reduce((s,x)=>s+(x.quantity??x.q??1),0);
-  return '<details class="hist"><summary><span><b>'+ref+'</b> · '+dt+'</span>'+
+  const n = (o.items||[]).reduce((s,x)=>s+(+(x.quantity??x.q??1)),0);
+  return '<details class="hist"><summary><span><b>'+ref+'</b> · '+fmtDate(o.createdAtMs)+'</span>'+
     '<span class="status '+(st==="cancelled"?"st-new":"st-delivered")+'">'+esc(STATUS_LABEL[st]||st)+'</span></summary>'+
     '<div class="hist-body">'+(o.items||[]).map(x=>'<b style="color:var(--cream)">'+esc(x.code)+'</b> · '+esc(x.height??x.h)+'×'+esc(x.width??x.w)+' in × '+(x.quantity??x.q)).join("<br>")+
-    '<br><span style="font-size:.74rem">'+n+' door'+(n>1?'s':'')+' total</span></div></details>';
+    '<br><span style="font-size:.74rem">'+n+' door'+(n>1?'s':'')+' total</span>'+
+    '<br><button class="oc-btn wa" style="margin-top:10px" onclick="openWA(\'Hi Legacy Doors, I would like to reorder '+ref+'\')">Reorder these doors</button></div></details>';
 }
 function toggleProfileEdit(){
   const p = document.getElementById("profileEdit");
@@ -1625,11 +1646,19 @@ async function saveProfileEdit(){
     toast("Profile updated");
   } catch(e){ console.error(e); toast("Couldn't save — try again"); }
 }
+function browseCatalogue(){
+  closeAll();
+  const el = document.getElementById("shop") || document.getElementById("catalogue");
+  if (el) el.scrollIntoView({ behavior:"smooth" });
+}
 async function openDash(){
   document.getElementById("dashName").textContent = profile ? (profile.firstName + " " + (profile.lastName || "")).trim() : "My Account";
   document.getElementById("dashSub").textContent = profile ? (profile.phone + (profile.email ? " · " + profile.email : "")) : "";
   document.getElementById("profileEdit").style.display = "none";
   showModal("dashModal");
+  renderDash();
+}
+async function renderDash(){
   const body = document.getElementById("dashBody");
   body.innerHTML = '<p class="empty">Loading your orders…</p>';
   try {
@@ -1639,14 +1668,26 @@ async function openDash(){
     const quotes = all.filter(o => QUOTE_STAGE.includes(o.status||"submitted"));
     const active = all.filter(o => !QUOTE_STAGE.includes(o.status||"submitted") && !DONE_STAGE.includes(o.status));
     const done   = all.filter(o => DONE_STAGE.includes(o.status));
-    let out = "";
+
+    if (!all.length){
+      body.innerHTML = '<div class="dempty"><h4>No orders yet</h4>'+
+        '<p>Once you place your first order, you\'ll track every stage right here —<br>from quotation to the day it reaches your site.</p>'+
+        '<button class="btn btn-solid" onclick="browseCatalogue()">Browse the catalogue</button></div>';
+      return;
+    }
+    let out = '<div class="dstats">'+
+      '<div class="dstat'+(active.length?' hot':'')+'"><b>'+active.length+'</b><span>In progress</span></div>'+
+      '<div class="dstat"><b>'+quotes.length+'</b><span>Quotations</span></div>'+
+      '<div class="dstat"><b>'+done.length+'</b><span>Completed</span></div></div>';
     if (active.length) out += '<div class="dash-sec">Orders in progress</div>' + active.map(o=>orderCard(o,true)).join("");
-    if (quotes.length) out += '<div class="dash-sec">Quotation requests</div>' + quotes.map(o=>orderCard(o,false)).join("");
+    if (quotes.length) out += '<div class="dash-sec">Awaiting quotation</div>' + quotes.map(o=>orderCard(o,false)).join("");
     if (done.length)   out += '<div class="dash-sec">Order history</div>' + done.map(histRow).join("");
-    body.innerHTML = out || '<p class="empty">No orders yet — your first order will appear here.</p>';
+    body.innerHTML = out;
   } catch(e) {
-    console.error(e);
-    body.innerHTML = '<p class="empty">Couldn\'t load orders right now.</p>';
+    console.error("DASH ERROR:", e && e.code, e);
+    body.innerHTML = '<div class="dempty"><h4>Couldn\'t load your orders</h4>'+
+      '<p>This is usually a brief connection issue.<br><span style="font-size:.76rem">'+esc((e&&e.code)||"unknown error")+'</span></p>'+
+      '<button class="btn btn-solid" onclick="renderDash()">Try again</button></div>';
   }
 }
 
