@@ -1586,6 +1586,20 @@ function doorThumb(code){
 function fmtDate(ms){
   return ms ? new Date(ms).toLocaleDateString("en-IN",{day:"numeric",month:"short",year:"numeric"}) : "";
 }
+const STATUS_LABEL = {
+  "submitted":"Request received", "under-review":"Under review", "clarification-required":"Needs a detail",
+  "quotation-ready":"Quotation ready", "accepted":"Order confirmed", "advance-pending":"Advance pending",
+  "advance-received":"Confirmed", "scheduled":"Scheduled", "in-production":"In production",
+  "quality-check":"Finishing & QC", "ready-for-dispatch":"Ready for dispatch", "dispatched":"Dispatched",
+  "delivered":"Delivered", "closed":"Completed", "cancelled":"Cancelled"
+};
+const STATUS_CLASS = {
+  "submitted":"st-new", "under-review":"st-new", "clarification-required":"st-new", "quotation-ready":"st-new",
+  "accepted":"st-production", "advance-pending":"st-production", "advance-received":"st-production",
+  "scheduled":"st-production", "in-production":"st-production", "quality-check":"st-production",
+  "ready-for-dispatch":"st-ready", "dispatched":"st-ready",
+  "delivered":"st-delivered", "closed":"st-delivered", "cancelled":"st-delivered"
+};
 function orderCard(o, withMiles){
   const st = (o.status || "submitted");
   const ref = esc(o.worksOrderId || ("#" + o.id.slice(-6).toUpperCase()));
