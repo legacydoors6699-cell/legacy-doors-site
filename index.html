@@ -1151,7 +1151,8 @@ const fbReady = CONFIG.firebase.apiKey && CONFIG.firebase.apiKey !== "REPLACE" &
 
 let db = null, auth = null;
 if (fbReady) {
-  try { firebase.initializeApp(CONFIG.firebase); db = firebase.firestore(); auth = firebase.auth(); }
+  try { firebase.initializeApp(CONFIG.firebase); db = firebase.firestore(); auth = firebase.auth();
+    try { auth.setPersistence(firebase.auth.Auth.Persistence.NONE); } catch(e){ console.warn('persistence', e); } }
   catch(e) { console.warn("Firebase init failed", e); }
 }
 
@@ -1442,6 +1443,8 @@ function freshRecaptcha(){
   _verifier = new firebase.auth.RecaptchaVerifier(box.id, { size: "invisible" });
   return _verifier;
 }
+function getRecaptcha(){ return _verifier || freshRecaptcha(); }
+if (fbReady) setTimeout(function(){ try { getRecaptcha().render(); } catch(e){ console.warn('recaptcha warmup', e); } }, 2500);
 function mapAuthError(e){
   const c = (e && e.code) || "";
   console.error("AUTH ERROR:", c, e);
@@ -1455,11 +1458,11 @@ function mapAuthError(e){
   if (c === "auth/invalid-verification-code") return "Wrong code — check the SMS and try again.";
   return "Couldn't complete that — please try again." + (c ? " (" + c + ")" : "");
 }
-async function sendOtp(phone, mode){
-  if (sendingOtp) return false;
+async function sendOtp(phone, mode, _retry){
+  if (sendingOtp && !_retry) return false;
   sendingOtp = true;
   try {
-    confirmation = await auth.signInWithPhoneNumber(phone, freshRecaptcha());
+    confirmation = await auth.signInWithPhoneNumber(phone, getRecaptcha());
     lastPhone = phone; lastMode = mode;
     document.getElementById("otpPhoneLbl").textContent = phone;
     document.getElementById("authOtp").value = "";
@@ -1468,9 +1471,14 @@ async function sendOtp(phone, mode){
     toast("OTP sent to " + phone);
     return true;
   } catch(e) {
-    toast(mapAuthError(e));
     try { if (_verifier) { _verifier.clear(); } } catch(_){}
     _verifier = null;
+    if (!_retry && e && e.code === "auth/network-request-failed") {
+      await new Promise(r => setTimeout(r, 1200));
+      sendingOtp = false;
+      return sendOtp(phone, mode, true);
+    }
+    toast(mapAuthError(e));
     return false;
   } finally {
     sendingOtp = false;
